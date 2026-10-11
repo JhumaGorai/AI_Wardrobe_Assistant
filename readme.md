@@ -14,9 +14,10 @@ Build is in progress, following the phased plan in `docs/IMPLEMENTATION_PROMPT.m
 - [x] Phase 0 — Repo inspected, plan confirmed
 - [x] Phase 1 — Project foundation (this increment)
 - [x] Phase 2 — Database schema & migrations (this increment)
-- [x] Phase 3 — Authentication (this increment)
-- [ ] Phase 4 — Profile & avatar
-- [ ] Phase 5 — Object storage
+- [x] Phase 3 — Authentication
+- [x] Phase 4 — Profile & avatar (this increment)
+- [x] Phase 5 — Object storage (this increment, built alongside Phase 4 since avatar upload
+      needs it; MinIO added to docker-compose as the local S3-compatible provider)
 - [ ] Phase 6+ — Garment upload, vision analysis, embeddings, wardrobe search, stylist, outfit
       generation/scoring, try-on, full frontend, tests, hardening
 
@@ -70,6 +71,14 @@ scripts/                  # Dev/ops helper scripts
    - Frontend: http://localhost:3000
    - API health check: http://localhost:8000/health
    - API docs (Swagger): http://localhost:8000/docs
+   - MinIO console (object storage, local dev only): http://localhost:9001
+     (login with `STORAGE_ACCESS_KEY` / `STORAGE_SECRET_KEY` from `.env`, default
+     `minioadmin` / `minioadmin`) — the `wardrobe-media` bucket is created automatically by the
+     API container itself on startup (`app/core/bootstrap_storage.py`).
+
+   Note on the `minio` image: MinIO stopped publishing free Docker Hub images in Oct 2025.
+   `docker-compose.yml` pins a community-mirrored image on quay.io instead. If that tag ever
+   stops resolving, check https://quay.io/repository/minio/minio?tab=tags for a current one.
 
 ## Running the API without Docker
 
@@ -111,3 +120,13 @@ slots: `LLM_*`, `VISION_*`, `EMBEDDING_*`, `TRYON_*`). Never commit a real `.env
   each phase needs them) — no provider SDK is imported outside its own implementation module.
 - `EMBEDDING_DIMENSION` controls the pgvector column width at migration time; it is not
   hard-coded to 1536.
+- **Known limitation:** avatar (and future garment) images are stored with a plain, permanent
+  public URL, not a presigned/expiring one — the local MinIO bucket is set to anonymous-read to
+  match (`apps/api/app/services/storage/s3.py`). Fine for local dev; revisit with presigned URLs
+  before deploying anywhere real.
+- Server-side (SSR) code in the frontend and the API's own object-storage client both need a
+  *different* URL to reach other services than the browser does, when running under Docker
+  Compose (container-to-container traffic uses the compose service name; the browser needs
+  `localhost`). See `apps/web/lib/api/base-url.ts` and the `STORAGE_ENDPOINT` /
+  `STORAGE_PUBLIC_URL` split in `.env.example` — the same pattern would apply to any future
+  service split the same way.

@@ -20,7 +20,11 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = 1440
 
     # --- Object storage ---
+    # storage_endpoint is what the API server itself connects to (inside Docker, this is the
+    # "minio" compose service name; outside Docker, localhost). storage_public_url is what gets
+    # baked into image URLs handed to the frontend/browser, which is always host-reachable.
     storage_endpoint: str = "http://localhost:9000"
+    storage_public_url: str = "http://localhost:9000"
     storage_bucket: str = "wardrobe-media"
     storage_access_key: str = "minioadmin"
     storage_secret_key: str = "minioadmin"

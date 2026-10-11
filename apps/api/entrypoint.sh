@@ -1,6 +1,9 @@
 #!/usr/bin/env sh
 set -e
 
+echo "Ensuring object storage bucket exists..."
+python -m app.core.bootstrap_storage
+
 echo "Running database migrations..."
 alembic upgrade head
 

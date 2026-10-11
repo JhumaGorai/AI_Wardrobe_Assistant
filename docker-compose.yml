@@ -17,6 +17,26 @@ services:
       timeout: 5s
       retries: 10
 
+  # As of Sept 2026, MinIO no longer publishes free Docker images to Docker Hub at all
+  # (announced Oct 2025). This pins to a community-mirrored image on quay.io instead — the
+  # exact same fix multiple real projects made this same month. It's a frozen snapshot (won't
+  # receive updates), which is a real concern for production but a non-issue for local dev.
+  # If this tag ever stops resolving, check https://quay.io/repository/minio/minio?tab=tags for
+  # a current one and update here.
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: wardrobe_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_KEY:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
   api:
     build:
       context: ./apps/api
@@ -30,9 +50,18 @@ services:
       # service name on the compose network) rather than reusing the top-level DATABASE_URL,
       # which intentionally points at "localhost" for running the API outside Docker.
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-wardrobe}:${POSTGRES_PASSWORD:-wardrobe}@postgres:5432/${POSTGRES_DB:-wardrobe}
+      # The API server itself must reach MinIO by its compose service name, not "localhost"
+      # (same reasoning as DATABASE_URL above). STORAGE_PUBLIC_URL stays host-reachable
+      # ("localhost") since it's baked into image URLs the browser loads directly. The api
+      # container's entrypoint.sh waits for MinIO and creates the bucket itself on startup
+      # (app/core/bootstrap_storage.py) — no separate mc init container needed.
+      STORAGE_ENDPOINT: http://minio:9000
+      STORAGE_PUBLIC_URL: ${STORAGE_PUBLIC_URL:-http://localhost:9000}
     depends_on:
       postgres:
         condition: service_healthy
+      minio:
+        condition: service_started
     ports:
       - "8000:8000"
     volumes:
@@ -63,3 +92,4 @@ services:
 
 volumes:
   postgres_data:
+  minio_data:
