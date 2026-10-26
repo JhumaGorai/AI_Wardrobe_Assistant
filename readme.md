@@ -18,8 +18,16 @@ Build is in progress, following the phased plan in `docs/IMPLEMENTATION_PROMPT.m
 - [x] Phase 4 — Profile & avatar (this increment)
 - [x] Phase 5 — Object storage (this increment, built alongside Phase 4 since avatar upload
       needs it; MinIO added to docker-compose as the local S3-compatible provider)
-- [ ] Phase 6+ — Garment upload, vision analysis, embeddings, wardrobe search, stylist, outfit
-      generation/scoring, try-on, full frontend, tests, hardening
+- [x] Phase 6 — Garment upload (`POST/GET/PUT/DELETE /api/v1/garments[/{id}]`, multipart image
+      upload, soft delete)
+- [x] Phase 7 — Garment vision analysis (this increment, built alongside Phase 6 since upload
+      needs somewhere to send the image for analysis; mock vision provider, runs as a
+      background task after the upload response is sent)
+- [x] Wardrobe UI pulled forward from Phase 18 — `/wardrobe` (grid), `/wardrobe/upload`,
+      `/wardrobe/[garmentId]` (detail/edit/delete). Uses a temporary "paste your access token"
+      dev shim for auth since real `/login`/`/signup` pages don't exist yet.
+- [ ] Phase 8+ — Embeddings, wardrobe search, stylist, outfit generation/scoring, try-on, full
+      login/signup UI, tests, hardening
 
 All AI providers (LLM, vision, embeddings, try-on) default to local **mock** implementations so the
 app runs end-to-end without any paid API keys. Swap in a real provider later by changing the
@@ -130,3 +138,27 @@ slots: `LLM_*`, `VISION_*`, `EMBEDDING_*`, `TRYON_*`). Never commit a real `.env
   `localhost`). See `apps/web/lib/api/base-url.ts` and the `STORAGE_ENDPOINT` /
   `STORAGE_PUBLIC_URL` split in `.env.example` — the same pattern would apply to any future
   service split the same way.
+- **Garment upload is asynchronous by design:** `POST /api/v1/garments` returns immediately with
+  `processing_status: "pending"` once the image is stored; vision analysis (currently the mock
+  provider, `apps/api/app/services/vision/mock.py`) runs afterward as a FastAPI `BackgroundTask`.
+  Poll `GET /api/v1/garments/{id}` to see it flip to `completed` (with `category`, `colors`,
+  etc. filled in) or `failed` (with a safe `processing_error`, never the raw exception). The
+  processing logic itself (`apps/api/app/services/garment_processor.py`) is a plain function that
+  takes a DB session and a `VisionService` as arguments — it doesn't know or care whether it was
+  called from a background task, a test, or (later) a Celery/RQ worker.
+- **Deliberate schema deviation:** `garments.category` is nullable, even though CLAUDE.md
+  specifies `NOT NULL` — see the comment in `apps/api/app/models/garment.py` and
+  `apps/api/alembic/versions/0002_garment_category_nullable.py` for why (a garment is created
+  before its category is known, and a failed analysis must be able to leave it unset).
+- **Wardrobe UI has no login/signup page yet** (that's Phase 18) — visit `/wardrobe` and you'll
+  see a box asking you to paste an `access_token`. Get one by signing up or logging in via
+  http://localhost:8000/docs (`POST /api/v1/auth/signup` or `/login`), copying the
+  `access_token` from the response, and pasting it into that box. It's stored in this browser's
+  `localStorage` only (`apps/web/lib/auth-token.ts`) and attached as a Bearer header to every
+  `/api/v1/garments*` request from then on. Clear it from the same box to "sign out".
+- **`GET /api/v1/garments` (list) was added ahead of Phase 9**: CLAUDE.md's actual wardrobe
+  listing/search endpoint (`GET /api/v1/wardrobe`, with filters/pagination) is Phase 9 and not
+  built yet, but the wardrobe grid page needs *some* way to show "garments you own" today. This
+  minimal, unfiltered version (`apps/api/app/repositories/garment_repository.py::list_for_user`)
+  can be superseded or extended by the real Phase 9 endpoint later without changing the CRUD
+  module's contract.

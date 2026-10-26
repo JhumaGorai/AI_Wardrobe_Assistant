@@ -3,8 +3,10 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-ALLOWED_AVATAR_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
-MAX_AVATAR_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+from app.core.image_validation import ALLOWED_IMAGE_CONTENT_TYPES as ALLOWED_AVATAR_CONTENT_TYPES
+from app.core.image_validation import MAX_IMAGE_SIZE_BYTES as MAX_AVATAR_SIZE_BYTES
+
+__all__ = ["ALLOWED_AVATAR_CONTENT_TYPES", "MAX_AVATAR_SIZE_BYTES", "AvatarRead"]
 
 
 class AvatarRead(BaseModel):

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { getHealth } from "@/lib/api/health";
 
 export default async function HomePage() {
@@ -15,6 +16,9 @@ export default async function HomePage() {
           {health.ok ? "connected" : "unreachable"}
         </span>
       </p>
+      <Link href="/wardrobe" className="rounded bg-neutral-900 px-4 py-2 text-sm text-white">
+        Go to your wardrobe
+      </Link>
     </main>
   );
 }

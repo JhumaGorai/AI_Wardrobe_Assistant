@@ -17,7 +17,13 @@ class Garment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str | None] = mapped_column(String, nullable=True)
-    category: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    # Nullable despite CLAUDE.md sec 4 specifying NOT NULL -- a deliberate, documented deviation.
+    # The upload flow (CLAUDE.md sec 8) creates this row in "pending" status *before* vision
+    # analysis has run, so category is genuinely unknown at creation time, and a failed analysis
+    # must be able to leave it unset rather than inventing a value. See alembic/versions/
+    # 0002_garment_category_nullable.py for the migration and full rationale. The 6 allowed
+    # values are still enforced by GarmentAnalysis/GarmentUpdate validators whenever it IS set.
+    category: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     subcategory: Mapped[str | None] = mapped_column(String, nullable=True)
     colors: Mapped[list] = mapped_column(JSON, default=list)
     pattern: Mapped[str | None] = mapped_column(String, nullable=True)
