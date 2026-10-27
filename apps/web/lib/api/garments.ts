@@ -49,8 +49,25 @@ export interface GarmentUpdateInput {
   description?: string;
 }
 
+interface WardrobeListResponse {
+  items: Garment[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+/**
+ * Calls the real GET /api/v1/wardrobe (Phase 9) -- supersedes the old minimal, unfiltered
+ * GET /api/v1/garments list that this function used to call (that stopgap route is gone now
+ * that the real one exists). This still returns a flat Garment[] so the wardrobe page doesn't
+ * need to change; `page_size` is set high since the wardrobe grid doesn't paginate yet.
+ */
 export async function listGarments(token: string): Promise<Garment[]> {
-  return apiFetch<Garment[]>("/garments", { method: "GET", token });
+  const response = await apiFetch<WardrobeListResponse>("/wardrobe?page=1&page_size=100", {
+    method: "GET",
+    token,
+  });
+  return response.items;
 }
 
 export async function getGarment(token: string, id: string): Promise<Garment> {

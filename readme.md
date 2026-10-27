@@ -26,8 +26,14 @@ Build is in progress, following the phased plan in `docs/IMPLEMENTATION_PROMPT.m
 - [x] Wardrobe UI pulled forward from Phase 18 — `/wardrobe` (grid), `/wardrobe/upload`,
       `/wardrobe/[garmentId]` (detail/edit/delete). Uses a temporary "paste your access token"
       dev shim for auth since real `/login`/`/signup` pages don't exist yet.
-- [ ] Phase 8+ — Embeddings, wardrobe search, stylist, outfit generation/scoring, try-on, full
-      login/signup UI, tests, hardening
+- [x] Phase 8 — Embeddings (`EmbeddingService`/`MockEmbeddingService`, wired into garment
+      processing after vision analysis: build embedding text -> generate -> verify dimension ->
+      store -> mark completed)
+- [x] Phase 9 — Wardrobe search (`GET /api/v1/wardrobe` with category/subcategory/color/style/
+      processing_status filters + pagination; `POST /api/v1/wardrobe/search` for pgvector
+      cosine-similarity semantic search, always scoped to the authenticated user)
+- [ ] Phase 10+ — Stylist (StyleIntent, outfit generation/scoring/persistence), try-on, full
+      login/signup UI, hardening
 
 All AI providers (LLM, vision, embeddings, try-on) default to local **mock** implementations so the
 app runs end-to-end without any paid API keys. Swap in a real provider later by changing the
@@ -156,9 +162,31 @@ slots: `LLM_*`, `VISION_*`, `EMBEDDING_*`, `TRYON_*`). Never commit a real `.env
   `access_token` from the response, and pasting it into that box. It's stored in this browser's
   `localStorage` only (`apps/web/lib/auth-token.ts`) and attached as a Bearer header to every
   `/api/v1/garments*` request from then on. Clear it from the same box to "sign out".
-- **`GET /api/v1/garments` (list) was added ahead of Phase 9**: CLAUDE.md's actual wardrobe
-  listing/search endpoint (`GET /api/v1/wardrobe`, with filters/pagination) is Phase 9 and not
-  built yet, but the wardrobe grid page needs *some* way to show "garments you own" today. This
-  minimal, unfiltered version (`apps/api/app/repositories/garment_repository.py::list_for_user`)
-  can be superseded or extended by the real Phase 9 endpoint later without changing the CRUD
-  module's contract.
+- **`GET /api/v1/wardrobe` and `POST /api/v1/wardrobe/search` (Phase 9)**: the real wardrobe
+  listing/search endpoints. `GET /api/v1/wardrobe` supports `category`/`subcategory`/`color`/
+  `style`/`processing_status` filters plus `page`/`page_size` pagination, scoped to the
+  authenticated user. `POST /api/v1/wardrobe/search` takes `{"query": ..., "category": ...,
+  "limit": ...}`, embeds the query, and ranks garments by pgvector cosine similarity — always
+  scoped to the authenticated user's own garments. These supersede the minimal, unfiltered
+  `GET /api/v1/garments` list that was pulled forward ahead of this phase alongside the wardrobe
+  UI; that stopgap route is gone now, and the wardrobe grid page (`apps/web/app/wardrobe/page.tsx`)
+  calls `/wardrobe` instead under the hood, with no UI changes needed.
+- **Embeddings are generated automatically after vision analysis (Phase 8)**: once a garment's
+  vision analysis completes, `apps/api/app/services/garment_processor.py` builds a text
+  description of it (`apps/api/app/services/embedding_text.py`), embeds that text
+  (`apps/api/app/services/embedding/`), verifies the result's length matches
+  `EMBEDDING_DIMENSION` (a mismatch is treated as a processing failure, never silently
+  truncated/padded), and stores the vector — only *then* is the garment marked `completed`.
+  **The mock embedding provider is a word-hashing trick, not real semantics**: it hashes each
+  word in the text into one of `EMBEDDING_DIMENSION` buckets with a pseudo-random sign, sums,
+  and normalizes, so two garments that share words rank as more similar, but "elegant" won't be
+  considered close to "sophisticated" unless they literally share a token. Good enough to prove
+  the embedding → storage → pgvector-ranking pipeline works end to end; not a real stylist yet.
+  Swap in a real provider later via `EMBEDDING_PROVIDER`/`EMBEDDING_API_KEY`/`EMBEDDING_MODEL`.
+- **Testing embeddings without a real Postgres**: the unit test suite runs against in-memory
+  SQLite, which can't hold the real pgvector column. `process_garment()` takes an injectable
+  embedding-store argument (mirroring how it already took an injectable vision service) so
+  tests can substitute an in-memory fake (`FakeEmbeddingStore` in `tests/conftest.py`) instead of
+  the real `apps/api/app/repositories/garment_embedding_repository.py`. The real pgvector cosine
+  ranking SQL itself isn't exercised by `pytest` at all — verify that manually via `/docs`
+  against your real Postgres (upload a few garments, then try `POST /api/v1/wardrobe/search`).

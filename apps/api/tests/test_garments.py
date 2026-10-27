@@ -5,6 +5,7 @@ from app.core.deps_processing import get_garment_processor
 from app.core.image_validation import MAX_IMAGE_SIZE_BYTES
 from app.main import app
 from app.schemas.garment import ALLOWED_CATEGORIES, GarmentAnalysis
+from app.services.embedding.mock import MockEmbeddingService
 from app.services.garment_processor import process_garment
 
 pytestmark = pytest.mark.asyncio
@@ -25,7 +26,7 @@ async def test_upload_requires_auth(client: AsyncClient):
 
 
 async def test_upload_creates_pending_garment_then_background_processing_completes(
-    client: AsyncClient, auth_headers: dict[str, str]
+    client: AsyncClient, auth_headers: dict[str, str], fake_embedding_store
 ):
     upload_response = await client.post(
         "/api/v1/garments", files=_image_file(), data={"name": "Favorite shirt"}, headers=auth_headers
@@ -50,6 +51,18 @@ async def test_upload_creates_pending_garment_then_background_processing_complet
     assert processed["category"] in ALLOWED_CATEGORIES
     assert isinstance(processed["colors"], list) and len(processed["colors"]) > 0
     assert processed["description"]
+
+    # Phase 8: an embedding should have been generated and "stored" (FakeEmbeddingStore stands
+    # in for the real pgvector write here -- see conftest.py) as part of the same background run
+    # that marked this garment completed, with the correct dimension and a non-empty source text.
+    from uuid import UUID
+
+    from app.core.config import get_settings
+
+    stored = fake_embedding_store.rows[UUID(processed["id"])]
+    assert len(stored["embedding"]) == get_settings().embedding_dimension
+    assert stored["embedding_model"]
+    assert "category:" in stored["embedding_text"]
 
 
 async def test_upload_rejects_unsupported_content_type(client: AsyncClient, auth_headers: dict[str, str]):
@@ -144,10 +157,15 @@ async def test_delete_garment_is_soft_delete(client: AsyncClient, auth_headers: 
 
 
 async def test_processing_failure_sets_failed_status_with_safe_error(
-    client: AsyncClient, auth_headers: dict[str, str], db_session
+    client: AsyncClient, auth_headers: dict[str, str], db_session, fake_embedding_store
 ):
     async def failing_processor(garment_id):
-        await process_garment(garment_id, db_session, _AlwaysFailingVisionService())
+        # Vision fails first, so the embedding step is never reached -- the real
+        # MockEmbeddingService/fake_embedding_store here are only present to satisfy
+        # process_garment's signature, not exercised by this test.
+        await process_garment(
+            garment_id, db_session, _AlwaysFailingVisionService(), MockEmbeddingService(), fake_embedding_store
+        )
 
     app.dependency_overrides[get_garment_processor] = lambda: failing_processor
 
@@ -161,31 +179,3 @@ async def test_processing_failure_sets_failed_status_with_safe_error(
     assert "simulated" not in body["processing_error"]
     assert "RuntimeError" not in body["processing_error"]
 
-
-async def test_list_garments_only_returns_own_active_garments(
-    client: AsyncClient, auth_headers: dict[str, str]
-):
-    first = await client.post(
-        "/api/v1/garments", files=_image_file(), data={"name": "First"}, headers=auth_headers
-    )
-    await client.post(
-        "/api/v1/garments", files=_image_file(), data={"name": "Second"}, headers=auth_headers
-    )
-    first_id = first.json()["id"]
-
-    # Soft-deleted garments must not appear in the list.
-    await client.delete(f"/api/v1/garments/{first_id}", headers=auth_headers)
-
-    other_signup = await client.post(
-        "/api/v1/auth/signup",
-        json={"email": "wardrobe-other@example.com", "name": "Other", "password": "another-password"},
-    )
-    other_headers = {"Authorization": f"Bearer {other_signup.json()['access_token']}"}
-    await client.post(
-        "/api/v1/garments", files=_image_file(), data={"name": "Not mine"}, headers=other_headers
-    )
-
-    list_response = await client.get("/api/v1/garments", headers=auth_headers)
-    assert list_response.status_code == 200
-    names = [g["name"] for g in list_response.json()]
-    assert names == ["Second"]

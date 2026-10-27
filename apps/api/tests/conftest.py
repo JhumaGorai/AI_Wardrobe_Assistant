@@ -2,20 +2,27 @@
 
 Uses an in-memory SQLite database (via aiosqlite) instead of Postgres so the suite runs without
 any external services. This means the pgvector-backed `garment_embeddings` table is intentionally
-excluded from `create_all` here (SQLite has no vector type) — anything touching embeddings needs a
-real Postgres+pgvector instance and belongs in a separate, explicitly-marked integration suite.
+excluded from `create_all` here (SQLite has no vector type) — anything touching the real
+embedding column, or real pgvector cosine-distance SQL, needs a real Postgres+pgvector instance
+and belongs in a separate, explicitly-marked integration suite (not written yet; Jhuma can smoke
+test real semantic search manually via /docs against her real Postgres).
 
 Object storage is likewise faked (FakeStorageService) rather than hitting a real MinIO/S3 —
 avatar/garment upload tests care about our own validation/repository logic, not boto3. Garment
-vision analysis uses the real MockVisionService (no real provider exists to fake instead), bound
-to this same db_session so a garment's background processing is visible to the test immediately
-after the request that triggered it returns -- see the `client` fixture's override of
+vision analysis uses the real MockVisionService (no real provider exists to fake instead), and
+Phase 8's embedding generation uses the real MockEmbeddingService the same way -- both bound to
+this same db_session so a garment's background processing is visible to the test immediately
+after the request that triggered it returns. Embedding *persistence*, however, uses
+FakeEmbeddingStore (an in-memory dict, same spirit as FakeStorageService) instead of the real
+app/repositories/garment_embedding_repository.py, specifically because that repository writes to
+the pgvector column this SQLite database doesn't have -- see the `client` fixture's override of
 get_garment_processor, and app/core/deps_processing.py for why that override is necessary at all
 (the production version opens its own DB session, which would be invisible to an in-memory
 SQLite test database created on a different connection).
 """
 from collections.abc import AsyncGenerator
 from typing import BinaryIO
+from uuid import UUID
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -30,6 +37,7 @@ from app.models.garment import Garment
 from app.models.garment_image import GarmentImage
 from app.models.user import User
 from app.models.user_profile import UserProfile
+from app.services.embedding.mock import MockEmbeddingService
 from app.services.garment_processor import process_garment
 from app.services.vision.mock import MockVisionService
 
@@ -46,6 +54,31 @@ class FakeStorageService:
 
     async def delete(self, key: str) -> None:
         self.uploaded.pop(key, None)
+
+
+class FakeEmbeddingStore:
+    """Stands in for app/repositories/garment_embedding_repository.py in tests -- see this
+    module's docstring for why the real one can't run against SQLite. Records every upsert
+    in-memory so a test can assert on what *would* have been persisted (model/text/vector)
+    without needing a real pgvector column."""
+
+    def __init__(self) -> None:
+        self.rows: dict[UUID, dict] = {}
+
+    async def upsert(
+        self,
+        db: AsyncSession,
+        *,
+        garment_id: UUID,
+        embedding: list[float],
+        embedding_model: str,
+        embedding_text: str,
+    ) -> None:
+        self.rows[garment_id] = {
+            "embedding": embedding,
+            "embedding_model": embedding_model,
+            "embedding_text": embedding_text,
+        }
 
 
 @pytest_asyncio.fixture
@@ -78,19 +111,27 @@ async def fake_storage() -> FakeStorageService:
 
 
 @pytest_asyncio.fixture
-async def client(db_session: AsyncSession, fake_storage: FakeStorageService) -> AsyncGenerator[AsyncClient, None]:
+async def fake_embedding_store() -> FakeEmbeddingStore:
+    return FakeEmbeddingStore()
+
+
+@pytest_asyncio.fixture
+async def client(
+    db_session: AsyncSession, fake_storage: FakeStorageService, fake_embedding_store: FakeEmbeddingStore
+) -> AsyncGenerator[AsyncClient, None]:
     async def override_get_db():
         yield db_session
 
     def override_get_garment_processor():
-        # Bound to this test's own db_session/MockVisionService rather than the production
-        # wrapper's fresh session, so a garment created in this request is already
-        # processed (visible via GET) by the time the triggering request returns -- see
-        # module docstring above.
+        # Bound to this test's own db_session/MockVisionService/MockEmbeddingService/
+        # FakeEmbeddingStore rather than the production wrapper's fresh session and real
+        # repository, so a garment created in this request is already processed (visible via
+        # GET) by the time the triggering request returns -- see module docstring above.
         vision_service = MockVisionService()
+        embedding_service = MockEmbeddingService()
 
         async def _process(garment_id):
-            await process_garment(garment_id, db_session, vision_service)
+            await process_garment(garment_id, db_session, vision_service, embedding_service, fake_embedding_store)
 
         return _process
 

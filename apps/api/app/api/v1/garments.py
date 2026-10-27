@@ -17,22 +17,6 @@ from app.services.storage import StorageService
 router = APIRouter(prefix="/garments", tags=["garments"])
 
 
-@router.get("", response_model=list[GarmentRead])
-async def list_garments(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> list[GarmentRead]:
-    """Minimal unfiltered listing pulled forward for the wardrobe UI -- see
-    garment_repository.list_for_user for why this exists ahead of the full Phase 9 search
-    endpoint."""
-    garments = await garment_repository.list_for_user(db, current_user.id)
-    reads = []
-    for garment in garments:
-        images = await garment_image_repository.list_for_garment(db, garment.id)
-        reads.append(GarmentRead.from_model(garment, images))
-    return reads
-
-
 @router.post("", response_model=GarmentRead, status_code=status.HTTP_201_CREATED)
 async def upload_garment(
     background_tasks: BackgroundTasks,
